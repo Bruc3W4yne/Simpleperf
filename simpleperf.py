@@ -2,6 +2,7 @@ import socket
 import sys
 import argparse
 import time
+import threading
 
 
 def serverSide(bindAdress, port, format, interval, buffer_size=1000):
@@ -50,21 +51,27 @@ def serverSide(bindAdress, port, format, interval, buffer_size=1000):
         clientSocket.close()
 
 
-def clientSide(server_ip, port, duration, format, buffer_size=1000):
+def clientSide(local_ip, local_port, server_ip, port, duration, format, interval, num, buffer_size=1000):
     print(f"A simpleperf client connecting to server <{server_ip}>, port {port}")
 
     clientSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    clientSocket.bind((local_ip, local_port))
     clientSocket.connect((server_ip, port))
 
-    print(f"Client connected with {server_ip}, port {port}")
+    print(f"Client {local_ip}:{local_port} connected with {server_ip}, on port {port}")
 
     start_time = time.time()
     bytes_sent = 0
     data = bytes(buffer_size)
 
-    while time.time() - start_time < duration:
-        clientSocket.sendall(data)
-        bytes_sent += buffer_size
+    if num is None:
+        while time.time() - start_time < duration:
+            clientSocket.sendall(data)
+            bytes_sent += buffer_size
+    else:
+        while bytes_sent < num:
+            clientSocket.sendall(data)
+            bytes_sent += buffer_size
 
     clientSocket.sendall(b"BYE")
     ack = clientSocket.recv(buffer_size)
@@ -75,6 +82,14 @@ def clientSide(server_ip, port, duration, format, buffer_size=1000):
         formattedResults("Client", server_ip, port, transfer_mb, 0, duration, format, duration)
         
     clientSocket.close()
+
+def parseNum(num_str):
+    if num_str.endswith("KB"):
+        return int(num_str[:-2]) * 1024
+    elif num_str.endswith("MB"):
+        return int(num_str[:-2]) * 1024 * 1024
+    else:
+        return int(num_str)
 
 def formattedResults(role, server_ip, port, transfer_mb, start, stop, format, interval):
     if format == "B":
@@ -120,4 +135,19 @@ if __name__ == "__main__":
     if args.server:
         serverSide(args.bind, args.port, args.format, args.interval)
     elif args.client:
-        clientSide(args.server_ip, args.port, args.time, args.format)
+
+        local_ip = socket.gethostbyname(socket.gethostname())
+        clientThreads = []
+
+        if args.num is not None:
+            num = parseNum(args.num)
+        else:
+            num = None
+        for n in range(args.parallel):
+            local_port = args.port + n +1
+            t = threading.Thread(target=clientSide, args=(local_ip, local_port, args.server_ip, args.port, args.time, args.format, args.interval, num))
+            clientThreads.append(t)
+            t.start()
+
+        for t in clientThreads:
+            t.join()
