@@ -2,9 +2,9 @@ import socket
 import sys
 import argparse
 import time
-import sched
 
-def serverSide(bindAdress, port, format, interval=None, buffer_size=1000):
+
+def serverSide(bindAdress, port, format, interval, buffer_size=1000):
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     serverSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
@@ -22,17 +22,29 @@ def serverSide(bindAdress, port, format, interval=None, buffer_size=1000):
 
         start_time = time.time()
         bytes_received = 0
+        interval_bytes = 0
+        prev_bytes = 0
+        interval_count = interval
 
         while True:
             data = clientSocket.recv(buffer_size)
             bytes_received += len(data)
+            transfer_mb = bytes_received / (1024 * 1024)
 
-            if b"BYE" in data:
+            if b"BYE" not in data and interval is not None:
+                elapsed_time = time.time() - start_time
+                if elapsed_time >= interval_count:
+                    interval_start = elapsed_time - interval
+                    interval_stop = elapsed_time
+                    interval_bytes = transfer_mb - prev_bytes
+                    prev_bytes = transfer_mb
+                    formattedResults("Server", clientAddress[0], clientAddress[1], interval_bytes, interval_start, interval_stop, format, interval)
+                    interval_count += interval
+
+            elif b"BYE" in data:
                 duration = time.time() - start_time
-                transfer_mb = bytes_received / (1024 * 1024)
-
                 clientSocket.sendall(b"ACK : BYE")
-                formattedResults("Server", clientAddress[0], clientAddress[1], transfer_mb, duration, format)
+                formattedResults("Server", clientAddress[0], clientAddress[1], transfer_mb, 0, duration, format, duration)
                 break
 
         clientSocket.close()
@@ -60,11 +72,11 @@ def clientSide(server_ip, port, duration, format, buffer_size=1000):
     if b"ACK : BYE" in ack:
         duration = time.time() - start_time
         transfer_mb = bytes_sent / (1024 * 1024)
-        formattedResults("Client", server_ip, port, transfer_mb, duration, format)
+        formattedResults("Client", server_ip, port, transfer_mb, 0, duration, format, duration)
         
     clientSocket.close()
 
-def formattedResults(role, server_ip, port, transfer_mb, duration, format):
+def formattedResults(role, server_ip, port, transfer_mb, start, stop, format, interval):
     if format == "B":
         unit = "B"
         speed = "bps"
@@ -77,9 +89,14 @@ def formattedResults(role, server_ip, port, transfer_mb, duration, format):
         unit ="MB"
         speed = "Mbps"
 
-    rate = (transfer_mb * 8) / duration
-    print(f"ID\tInterval\t{'Transferred' if role == 'Client' else 'Received'}\tRate")
-    print(f"{server_ip}:{port}\t0.0-{duration:.1f}s\t{transfer_mb:.0f}{unit}\t{rate:.2f} {speed}")
+    rate = (transfer_mb * 8) / interval
+
+    if stop == interval:
+        print("----------------------------------------------------------------")
+        print(f"\tComplete statistics for duration 0.0 - {stop:.1f}")
+    print("----------------------------------------------------------------")
+    print(f"ID\t\tInterval\t{'Transferred' if role == 'Client' else 'Received'}\tRate")
+    print(f"{server_ip}:{port}\t{start:.1f}-{stop:.1f}s\t{transfer_mb:.0f}{unit}\t\t{rate:.2f} {speed}")
 
 def parsedArgs():
     parser = argparse.ArgumentParser()
@@ -90,7 +107,7 @@ def parsedArgs():
     parser.add_argument("-f", "--format", type=str, choices=["B", "KB", "MB"], help="What format to show the results in", default="MB")
     parser.add_argument("-I", "--server-ip", type=str, help="Sets IP adress of the server", default="127.0.0.1")
     parser.add_argument("-t", "--time", type=int, help="Total duration for data to be generated and sent to server", default=25)
-    parser.add_argument("-i", "--interval", type=int, help="Prints statistics per z seconds", default="25")
+    parser.add_argument("-i", "--interval", type=int, help="Prints statistics per z seconds", default=25)
     parser.add_argument("-P", "--parallel", type=int, choices=range(1, 6), help="Create specified numbers of instances to the server", default=1)
     parser.add_argument("-n", "--num", type=str, help="Transfer number of bytes specified by -n flag")
     
